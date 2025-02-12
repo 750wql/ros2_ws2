@@ -1,0 +1,4 @@
+int32 src_city
+int32 des_city
+---
+int32[] path
