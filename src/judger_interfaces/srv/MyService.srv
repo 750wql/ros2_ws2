@@ -1,0 +1,4 @@
+MyAnswer answer
+---
+int8 score
+string log
