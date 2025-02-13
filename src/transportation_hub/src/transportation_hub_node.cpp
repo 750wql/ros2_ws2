@@ -4,6 +4,9 @@
 #include <rclcpp/rclcpp.hpp>
 #include <transportation_msgs/msg/overall_info.hpp>
 #include <transportation_msgs/srv/shortest_path.hpp>
+#include <judger_interfaces/msg/overall_info.hpp>
+#include <judger_interfaces/msg/road_info.hpp>
+#include <judger_interfaces/srv/my_service.hpp>
 #include <vector>
 #include <map>
 #include <queue>
@@ -11,17 +14,18 @@
 
 using namespace std;
 
-class TransportationHubNode : public rclcpp::Node
-{
+class TransportationHubNode : public rclcpp::Node {
 public:
     TransportationHubNode() : Node("transportation_hub_node")
     {
-        // 订阅question话题，获取道路和城市信息
+        // 订阅 `question` 话题，接收城市和道路信息
         subscription_ = this->create_subscription<transportation_msgs::msg::OverallInfo>(
             "question", 10, std::bind(&TransportationHubNode::handle_message, this, std::placeholders::_1));
 
-        // 服务客户端，用于发送计算结果
+        // 创建服务客户端
         client_ = this->create_client<transportation_msgs::srv::ShortestPath>("judger_server");
+
+        RCLCPP_INFO(this->get_logger(), "Transportation Hub Node Started.");
     }
 
 private:
@@ -30,20 +34,21 @@ private:
 
     void handle_message(const transportation_msgs::msg::OverallInfo::SharedPtr msg)
     {
-        // 解析道路信息并构建图
         int number_of_cities = msg->number_of_cities;
-        map<int, vector<pair<int, int>>> graph;  // 存储图：城市 -> {目标城市, 路径长度}
-
-        for (const auto &road : msg->road_info)
-        {
-            graph[road.source].push_back({road.destination, road.length});
-            graph[road.destination].push_back({road.source, road.length});
-        }
-
         int src_city = msg->src_city;
         int des_city = msg->des_city;
 
-        // 使用Dijkstra算法找到最短路径
+        RCLCPP_INFO(this->get_logger(), "Received map with %d cities and %lu roads.", number_of_cities, msg->infos.size());
+        RCLCPP_INFO(this->get_logger(), "Finding shortest path from %d to %d.", src_city, des_city);
+
+        map<int, vector<pair<int, int>>> graph;  // 存储无向图
+        for (const auto &road : msg->infos)
+        {
+            graph[road.source].emplace_back(road.destination, road.length);
+            graph[road.destination].emplace_back(road.source, road.length);
+        }
+
+        // Dijkstra 计算最短路径
         vector<int> dist(number_of_cities, INT_MAX);
         vector<int> prev(number_of_cities, -1);
         dist[src_city] = 0;
@@ -56,8 +61,7 @@ private:
             int d = pq.top().first;
             pq.pop();
 
-            if (d > dist[u])
-                continue;
+            if (d > dist[u]) continue;
 
             for (const auto &neighbor : graph[u])
             {
@@ -81,39 +85,45 @@ private:
         }
         reverse(path.begin(), path.end());
 
-        // 通过服务发送结果
-        if (client_->wait_for_service(std::chrono::seconds(1)))
+        if (path.empty() || path.front() != src_city)
         {
-            auto request = std::make_shared<transportation_msgs::srv::ShortestPath::Request>();
-
-            request->src_city = src_city;  // 设置源城市
-            request->des_city = des_city; // 设置目标城市
-
-            auto result_future = client_->async_send_request(request);
-            try
-            {
-                auto result = result_future.get();
-                if (!result->path.empty())  // 判断路径是否为空，表示成功
-                {
-                    RCLCPP_INFO(this->get_logger(), "Shortest path: ");
-                    for (int city : result->path)
-                    {
-                        RCLCPP_INFO(this->get_logger(), "%d", city);
-                    }
-                }
-                else
-                {
-                    RCLCPP_ERROR(this->get_logger(), "Failed to find a path.");
-                }
-            }
-            catch (const std::exception &e)
-            {
-                RCLCPP_ERROR(this->get_logger(), "Failed to send result: %s", e.what());
-            }
+            RCLCPP_ERROR(this->get_logger(), "No valid path found from %d to %d.", src_city, des_city);
+            return;
         }
-        else
+
+        // 发送服务请求
+        if (!client_->wait_for_service(std::chrono::seconds(2)))
         {
             RCLCPP_ERROR(this->get_logger(), "Judger server not available.");
+            return;
+        }
+
+        auto request = std::make_shared<transportation_msgs::srv::ShortestPath_Request>();
+        request->src_city = src_city;
+        request->des_city = des_city;
+
+
+        auto result_future = client_->async_send_request(request);
+
+        try
+        {
+            auto result = result_future.get();
+            if (!result->path.empty())
+            {
+                RCLCPP_INFO(this->get_logger(), "Shortest path found:");
+                for (int city : result->path)
+                {
+                    RCLCPP_INFO(this->get_logger(), "%d", city);
+                }
+            }
+            else
+            {
+                RCLCPP_ERROR(this->get_logger(), "Judger server did not return a valid path.");
+            }
+        }
+        catch (const std::exception &e)
+        {
+            RCLCPP_ERROR(this->get_logger(), "Error during service request: %s", e.what());
         }
     }
 };

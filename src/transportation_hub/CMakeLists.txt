@@ -9,7 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(transportation_msgs REQUIRED)
-find_package(transportation_msgs REQUIRED)
+find_package(judger_interfaces REQUIRED)
 add_executable(transportation_hub_node src/transportation_hub_node.cpp)
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -26,6 +26,7 @@ ament_target_dependencies(transportation_hub_node
   rclcpp
   std_msgs
   transportation_msgs
+        judger_interfaces
 )
 install(TARGETS
   transportation_hub_node
