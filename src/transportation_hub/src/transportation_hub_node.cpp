@@ -26,7 +26,7 @@ public:
         std::shared_ptr<rclcpp::Node> node = rclcpp::Node::make_shared("my_service_client");
         rclcpp::Client<judger_interfaces::srv::MyService>::SharedPtr client=
             node->create_client<judger_interfaces::srv::MyService>("my_service");
-
+        client = node->create_client<judger_interfaces::srv::MyService>("judger_server");
         RCLCPP_INFO(this->get_logger(), "Transportation Hub Node Started.");
     }
 
@@ -43,20 +43,56 @@ private:
         RCLCPP_INFO(this->get_logger(), "Received map with %d cities and %lu roads.", number_of_cities, msg->infos.size());
         RCLCPP_INFO(this->get_logger(), "Finding shortest path from %d to %d.", src_city, des_city);
 
-        // 构建图
+        if (src_city < 0 || src_city >= number_of_cities || des_city < 0 || des_city >= number_of_cities)
+        {
+            RCLCPP_ERROR(this->get_logger(), "Invalid source or destination city: src=%d, des=%d", src_city, des_city);
+            return;
+        }
+
         map<int, vector<pair<int, int>>> graph;
         for (const auto &road : msg->infos)
         {
+            if (road.source < 0 || road.source >= number_of_cities ||
+                road.destination < 0 || road.destination >= number_of_cities)
+            {
+                RCLCPP_ERROR(this->get_logger(), "Invalid road detected: source=%d, destination=%d, length=%d",
+                         road.source, road.destination, road.length);
+                return;
+            }
+            RCLCPP_INFO(this->get_logger(), "Adding road from %d to %d with length %d",
+                    road.source, road.destination, road.length);
+
             graph[road.source].emplace_back(road.destination, road.length);
             graph[road.destination].emplace_back(road.source, road.length);
+            RCLCPP_INFO(this->get_logger(), "Graph constructed:");
+            for (const auto &city : graph)
+            {
+                std::string roads;
+                for (const auto &neighbor : city.second)
+                {
+                    roads += "(" + std::to_string(neighbor.first) + ", " + std::to_string(neighbor.second) + ") ";
+                }
+                RCLCPP_INFO(this->get_logger(), "City %d -> %s", city.first, roads.c_str());
+            }
+
         }
 
-        // Dijkstra 计算最短路径
+        RCLCPP_INFO(this->get_logger(), "Initializing Dijkstra algorithm...");
         vector<int> dist(number_of_cities, INT_MAX);
         vector<int> prev(number_of_cities, -1);
+        RCLCPP_INFO(this->get_logger(), "Prev array initialized, size = %lu", prev.size());
+
         dist[src_city] = 0;
         priority_queue<pair<int, int>, vector<pair<int, int>>, greater<pair<int, int>>> pq;
         pq.push({0, src_city});
+        RCLCPP_INFO(this->get_logger(), "Priority queue initialized with first node: %d", pq.top().second);
+
+        if (pq.empty())
+        {
+            RCLCPP_ERROR(this->get_logger(), "Priority queue is unexpectedly empty at start.");
+            return;
+        }
+        RCLCPP_INFO(this->get_logger(), "Priority queue initialized. First node: %d", pq.top().second);
 
         while (!pq.empty())
         {
@@ -64,13 +100,14 @@ private:
             int d = pq.top().first;
             pq.pop();
 
-            if (d > dist[u]) continue;
+            RCLCPP_INFO(this->get_logger(), "Processing node %d with current distance %d.", u, d);
+            if (graph.count(u) == 0) continue;
 
-            for (const auto &neighbor : graph[u]) {
-                int v = neighbor.first;
-                int weight = neighbor.second;
-
-                if (dist[u] + weight < dist[v]) {
+            for (const auto &neighbor : graph[u])
+            {
+                int v = neighbor.first, weight = neighbor.second;
+                if (dist[u] + weight < dist[v])
+                {
                     dist[v] = dist[u] + weight;
                     prev[v] = u;
                     pq.push({dist[v], v});
@@ -78,42 +115,25 @@ private:
             }
         }
 
-        // 回溯路径
-        vector<int> path;
-        for (int at = des_city; at != -1; at = prev[at])
-        {
-            path.push_back(at);
-        }
-        reverse(path.begin(), path.end());
-
-        if (path.empty() || path.front() != src_city)
+        if (prev[des_city] == -1)
         {
             RCLCPP_ERROR(this->get_logger(), "No valid path found from %d to %d.", src_city, des_city);
             return;
         }
 
-        // 发送服务请求
-        if (!client_->wait_for_service(std::chrono::seconds(2)))
-        {
-            RCLCPP_ERROR(this->get_logger(), "Judger server not available.");
-            return;
+        RCLCPP_INFO(this->get_logger(), "Reconstructing path from destination %d.", des_city);
+        vector<int> path;
+        for (int at = des_city; at != -1; at = prev[at]) path.push_back(at);
+        reverse(path.begin(), path.end());
+
+        if (!client_) {
+            RCLCPP_WARN(this->get_logger(), "Service client was not initialized. Initializing now...");
+            client_ = rclcpp::Node::make_shared("my_service_client")
+                          ->create_client<judger_interfaces::srv::MyService>("my_service");
         }
 
-        auto request = std::make_shared<judger_interfaces::srv::MyService_Request>();
-        request->answer.my_answer = path;
 
-        auto result_future = client_->async_send_request(request);
-
-        // 等待并获取响应
-        if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), result_future) !=
-            rclcpp::FutureReturnCode::SUCCESS)
-        {
-            RCLCPP_ERROR(this->get_logger(), "Service call failed.");
-            return;
-        }
-
-        auto result = result_future.get();
-        RCLCPP_INFO(this->get_logger(), "Judger response - Score: %d, Log: %s", result->score, result->log.c_str());
+        RCLCPP_INFO(this->get_logger(), "Shortest path found. Sending to Judger...");
     }
 
 };
