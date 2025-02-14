@@ -23,7 +23,9 @@ public:
             "question", 10, std::bind(&TransportationHubNode::handle_message, this, std::placeholders::_1));
 
         // 创建服务客户端
-        client_ = this->create_client<judger_interfaces::srv::MyService>("judger_server");
+        std::shared_ptr<rclcpp::Node> node = rclcpp::Node::make_shared("my_service_client");
+        rclcpp::Client<judger_interfaces::srv::MyService>::SharedPtr client=
+            node->create_client<judger_interfaces::srv::MyService>("my_service");
 
         RCLCPP_INFO(this->get_logger(), "Transportation Hub Node Started.");
     }
@@ -64,7 +66,16 @@ private:
 
             if (d > dist[u]) continue;
 
-            
+            for (const auto &neighbor : graph[u]) {
+                int v = neighbor.first;
+                int weight = neighbor.second;
+
+                if (dist[u] + weight < dist[v]) {
+                    dist[v] = dist[u] + weight;
+                    prev[v] = u;
+                    pq.push({dist[v], v});
+                }
+            }
         }
 
         // 回溯路径
@@ -91,8 +102,6 @@ private:
         auto request = std::make_shared<judger_interfaces::srv::MyService_Request>();
         request->answer.my_answer = path;
 
-
-
         auto result_future = client_->async_send_request(request);
 
         // 等待并获取响应
@@ -106,6 +115,7 @@ private:
         auto result = result_future.get();
         RCLCPP_INFO(this->get_logger(), "Judger response - Score: %d, Log: %s", result->score, result->log.c_str());
     }
+
 };
 
 int main(int argc, char **argv)
