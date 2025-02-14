@@ -132,6 +132,25 @@ private:
                           ->create_client<judger_interfaces::srv::MyService>("my_service");
         }
 
+        string path_str = "Shortest path: ";
+        for (int city : path) {
+            path_str += to_string(city) + " ";
+        }
+        RCLCPP_INFO(this->get_logger(), "%s", path_str.c_str());
+
+        judger_interfaces::msg::MyAnswer answer;
+        for (int city : path) {
+            answer.my_answer.push_back(city);  // 将路径上的每个城市加入 `my_answer`
+        }
+
+        // 创建请求并将 `answer` 设置为请求内容
+        auto request = std::make_shared<judger_interfaces::srv::MyService::Request>();
+        request->answer = answer;  // 将 `Answer` 对象赋给请求的 `answer` 字段
+
+        // 发送请求
+        auto future = client_->async_send_request(request);
+
+
 
         RCLCPP_INFO(this->get_logger(), "Shortest path found. Sending to Judger...");
     }
